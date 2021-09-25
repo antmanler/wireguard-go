@@ -118,9 +118,17 @@ func Initialize() bool {
 		if err != nil {
 			return
 		}
+
 		// While we should be able to stop here, after getting the function pointers, some anti-virus actually causes
 		// failures in RIOCreateRequestQueue, so keep going to be certain this is supported.
-		cq, err = CreatePolledCompletionQueue(2)
+		var iocp windows.Handle
+		iocp, err = windows.CreateIoCompletionPort(windows.InvalidHandle, 0, 0, 0)
+		if err != nil {
+			return
+		}
+		defer windows.CloseHandle(iocp)
+		var overlapped windows.Overlapped
+		cq, err = CreateIOCPCompletionQueue(2, iocp, 0, &overlapped)
 		if err != nil {
 			return
 		}
@@ -161,6 +169,7 @@ func CreateIOCPCompletionQueue(queueSize uint32, iocp windows.Handle, key uintpt
 	notificationCompletion := &iocpNotificationCompletion{
 		completionType: iocpCompletion,
 		iocp:           iocp,
+		key:            key,
 		overlapped:     overlapped,
 	}
 	ret, _, err := syscall.Syscall(extensionFunctionTable.rioCreateCompletionQueue, 2, uintptr(queueSize), uintptr(unsafe.Pointer(notificationCompletion)), 0)
