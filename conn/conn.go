@@ -8,9 +8,17 @@ package conn
 
 import (
 	"errors"
+	"fmt"
 	"net"
+	"reflect"
+	"runtime"
 	"strings"
 )
+
+// A ReceiveFunc receives a single inbound packet from the network.
+// It writes the data into b. n is the length of the packet.
+// ep is the remote endpoint.
+type ReceiveFunc func(b []byte) (n int, ep Endpoint, err error)
 
 // A Bind listens on a port for both IPv6 and IPv4 UDP traffic.
 //
@@ -19,22 +27,16 @@ import (
 type Bind interface {
 	// Open puts the Bind into a listening state on a given port and reports the actual
 	// port that it bound to. Passing zero results in a random selection.
-	Open(port uint16) (actualPort uint16, err error)
+	// fns is the set of functions that will be called to receive packets.
+	Open(port uint16) (fns []ReceiveFunc, actualPort uint16, err error)
 
 	// Close closes the Bind listener.
+	// All fns returned by Open must return net.ErrClosed after a call to Close.
 	Close() error
 
 	// SetMark sets the mark for each packet sent through this Bind.
 	// This mark is passed to the kernel as the socket option SO_MARK.
 	SetMark(mark uint32) error
-
-	// ReceiveIPv6 reads an IPv6 UDP packet into b.  It reports the number of bytes read,
-	// n, the packet source address ep, and any error.
-	ReceiveIPv6(b []byte) (n int, ep Endpoint, err error)
-
-	// ReceiveIPv4 reads an IPv4 UDP packet into b. It reports the number of bytes read,
-	// n, the packet source address ep, and any error.
-	ReceiveIPv4(b []byte) (n int, ep Endpoint, err error)
 
 	// Send writes a packet b to address ep.
 	Send(b []byte, ep Endpoint) error
@@ -70,6 +72,54 @@ type Endpoint interface {
 	SrcIP() net.IP
 }
 
+var (
+	ErrBindAlreadyOpen   = errors.New("bind is already open")
+	ErrWrongEndpointType = errors.New("endpoint type does not correspond with bind type")
+)
+
+func (fn ReceiveFunc) PrettyName() string {
+	name := runtime.FuncForPC(reflect.ValueOf(fn).Pointer()).Name()
+	// 0. cheese/taco.beansIPv6.func12.func21218-fm
+	name = strings.TrimSuffix(name, "-fm")
+	// 1. cheese/taco.beansIPv6.func12.func21218
+	if idx := strings.LastIndexByte(name, '/'); idx != -1 {
+		name = name[idx+1:]
+		// 2. taco.beansIPv6.func12.func21218
+	}
+	for {
+		var idx int
+		for idx = len(name) - 1; idx >= 0; idx-- {
+			if name[idx] < '0' || name[idx] > '9' {
+				break
+			}
+		}
+		if idx == len(name)-1 {
+			break
+		}
+		const dotFunc = ".func"
+		if !strings.HasSuffix(name[:idx+1], dotFunc) {
+			break
+		}
+		name = name[:idx+1-len(dotFunc)]
+		// 3. taco.beansIPv6.func12
+		// 4. taco.beansIPv6
+	}
+	if idx := strings.LastIndexByte(name, '.'); idx != -1 {
+		name = name[idx+1:]
+		// 5. beansIPv6
+	}
+	if name == "" {
+		return fmt.Sprintf("%p", fn)
+	}
+	if strings.HasSuffix(name, "IPv4") {
+		return "v4"
+	}
+	if strings.HasSuffix(name, "IPv6") {
+		return "v6"
+	}
+	return name
+}
+
 func parseEndpoint(s string) (*net.UDPAddr, error) {
 	// ensure that the host is an IP address
 
@@ -99,8 +149,3 @@ func parseEndpoint(s string) (*net.UDPAddr, error) {
 	}
 	return addr, err
 }
-
-var (
-	ErrBindAlreadyOpen   = errors.New("bind is already open")
-	ErrWrongEndpointType = errors.New("endpoint type does not correspond with bind type")
-)
